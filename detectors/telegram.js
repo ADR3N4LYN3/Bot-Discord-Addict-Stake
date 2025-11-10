@@ -159,7 +159,31 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
       } catch { /* continue */ }
     }
 
-    if (debug) console.log('[telegram] No valid bonus link found in message');
+    // Si aucun lien complet trouvé, chercher un code brut (dans les spoilers par exemple)
+    if (debug) console.log('[telegram] No URL found, searching for raw codes...');
+
+    // Chercher dans les spoilers et le texte des codes qui ressemblent à des codes Stake
+    const allText = [caption, ...candidates].join(' ');
+    const rawCodeMatch = allText.match(/\b[a-zA-Z0-9]{10,30}\b/g);
+
+    if (rawCodeMatch && rawCodeMatch.length > 0) {
+      // Tester chaque code potentiel
+      for (const potentialCode of rawCodeMatch) {
+        // Ignorer les codes qui sont clairement pas des codes bonus
+        if (/^https?|^www\./i.test(potentialCode)) continue;
+
+        // Construire une URL fictive pour tester avec extractCodeFromUrl
+        const testUrl = `https://playstake.club/bonus?code=${potentialCode}`;
+        const extractedCode = extractCodeFromUrl(testUrl);
+
+        if (extractedCode === potentialCode) {
+          if (debug) console.log('[telegram] Valid raw code found:', potentialCode);
+          return { url: testUrl, code: potentialCode };
+        }
+      }
+    }
+
+    if (debug) console.log('[telegram] No valid bonus link or code found in message');
     return null;
   }
 

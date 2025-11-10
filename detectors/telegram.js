@@ -296,55 +296,63 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     //   if (!ok) return;
     // }
 
-    // -------- NOUVEAU SYSTÈME (RainsTEAM) : conditions et code dans messages séparés
-    // IMPORTANT : Vérifier RainsTEAM AVANT le système classique pour éviter les faux positifs
-    cleanExpiredCache();
+    // Détection du canal pour appliquer la bonne logique
+    const isRainsTEAM = usernameLower === 'rainsteam' || chatIdStr === '1738096535';
 
-    // Cas 1 : Message d'annonce avec conditions → stocker dans cache
-    if (isAnnouncementMessage(caption)) {
-      const conditions = extractConditions(caption);
-      if (conditions.length > 0) {
-        channelCache.set(chatIdStr, { conditions, timestamp: Date.now() });
-        if (debug) console.log('[telegram] RainsTEAM announcement: stored', conditions.length, 'conditions');
+    // -------- SYSTÈME RAINSTEAM : conditions et code dans messages séparés
+    if (isRainsTEAM) {
+      cleanExpiredCache();
+
+      // Cas 1 : Message d'annonce avec conditions → stocker dans cache
+      if (isAnnouncementMessage(caption)) {
+        const conditions = extractConditions(caption);
+        if (conditions.length > 0) {
+          channelCache.set(chatIdStr, { conditions, timestamp: Date.now() });
+          if (debug) console.log('[telegram] RainsTEAM announcement: stored', conditions.length, 'conditions');
+        }
+        return; // Ne pas publier, on attend le code
       }
-      return; // Ne pas publier, on attend le code
-    }
 
-    // Cas 2 : Message "coming soon" → ignorer
-    if (isComingSoonMessage(caption)) {
-      if (debug) console.log('[telegram] RainsTEAM: ignoring "coming soon" message');
-      return;
-    }
-
-    // Cas 3 : Code standalone → récupérer conditions du cache et publier
-    if (isStandaloneCode(caption)) {
-      const code = caption.trim();
-      const cached = channelCache.get(chatIdStr);
-
-      if (!cached || !cached.conditions) {
-        if (debug) console.log('[telegram] RainsTEAM: code found but no cached conditions');
+      // Cas 2 : Message "coming soon" → ignorer
+      if (isComingSoonMessage(caption)) {
+        if (debug) console.log('[telegram] RainsTEAM: ignoring "coming soon" message');
         return;
       }
 
-      // Dédup
-      const key = `tg:${chatIdStr || 'x'}:${message.id}`;
-      if (await alreadySeen(key)) return;
+      // Cas 3 : Code standalone → récupérer conditions du cache et publier
+      if (isStandaloneCode(caption)) {
+        const code = caption.trim();
+        const cached = channelCache.get(chatIdStr);
 
-      if (debug) console.log('[telegram] RainsTEAM: code found with cached conditions:', code);
+        if (!cached || !cached.conditions) {
+          if (debug) console.log('[telegram] RainsTEAM: code found but no cached conditions');
+          return;
+        }
 
-      // Construire URL et publier
-      try {
-        const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(code)}&currency=usdc&modal=redeemBonus`;
-        const payload = buildPayloadFromUrl(url, { rankMin: 'Bronze', conditions: cached.conditions });
-        const channel = await client.channels.fetch(channelId);
-        await publishDiscord(channel, payload, { pingSpoiler: true });
-        console.log('[telegram] RainsTEAM bonus publié ->', code);
+        // Dédup
+        const key = `tg:${chatIdStr || 'x'}:${message.id}`;
+        if (await alreadySeen(key)) return;
 
-        // Nettoyer le cache après publication
-        channelCache.delete(chatIdStr);
-      } catch (e) {
-        console.error('[telegram] RainsTEAM publish error:', e.message);
+        if (debug) console.log('[telegram] RainsTEAM: code found with cached conditions:', code);
+
+        // Construire URL et publier
+        try {
+          const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(code)}&currency=usdc&modal=redeemBonus`;
+          const payload = buildPayloadFromUrl(url, { rankMin: 'Bronze', conditions: cached.conditions });
+          const channel = await client.channels.fetch(channelId);
+          await publishDiscord(channel, payload, { pingSpoiler: true });
+          console.log('[telegram] RainsTEAM bonus publié ->', code);
+
+          // Nettoyer le cache après publication
+          channelCache.delete(chatIdStr);
+        } catch (e) {
+          console.error('[telegram] RainsTEAM publish error:', e.message);
+        }
+        return;
       }
+
+      // Si aucun pattern RainsTEAM détecté
+      if (debug) console.log('[telegram] RainsTEAM: message ignored (no pattern matched)');
       return;
     }
 

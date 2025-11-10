@@ -343,13 +343,14 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
 
             if (debug) console.log('[telegram] VIP Notices: detected type=', rec.kind, 'title=', title);
 
-            // Construire l'URL et publier
-            const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(code)}&currency=usdc&modal=redeemBonus`;
+            // Construire l'URL et publier (format simple pour VIP Notices)
+            const url = `https://stake.com?bonus=${encodeURIComponent(code)}`;
             const payload = buildPayloadFromUrl(url, {
               rankMin: 'Bronze',
               code: code,
               title: title,
-              description: description
+              description: description,
+              useSimpleFormat: true
             });
 
             const channel = await client.channels.fetch(channelId);

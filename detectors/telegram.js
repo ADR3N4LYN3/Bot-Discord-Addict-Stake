@@ -257,11 +257,11 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     const caption = message.message || '';
     console.log(`[telegram] ${kind} in ${chatIdStr || usernameLower} -> msgId=${message.id}`);
 
-    // (Réactive le filtre si tu veux restreindre)
-    // if (handles.size || ids.size) {
-    //   const ok = (usernameLower && handles.has(usernameLower)) || (chatIdStr && ids.has(chatIdStr));
-    //   if (!ok) return;
-    // }
+    // Filtre pour n'écouter que les canaux configurés
+    if (handles.size || ids.size) {
+      const ok = (usernameLower && handles.has(usernameLower)) || (chatIdStr && ids.has(chatIdStr));
+      if (!ok) return;
+    }
 
     // Détection du canal pour appliquer la bonne logique
     // RainsTEAM : les 2 premiers messages contiennent @RainsTEAM, le 3ème (code) non

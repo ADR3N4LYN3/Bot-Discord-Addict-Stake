@@ -56,6 +56,9 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
       handles.size || ids.size ? `handles=[${[...handles]}], ids=[${[...ids]}]` : 'ALL CHATS');
   }
 
+  console.log('[telegram] Configured channels:',
+    handles.size || ids.size ? `handles=[${[...handles]}], ids=[${[...ids]}]` : 'ALL CHATS');
+
   // Health ping (optionnel)
   if (process.env.TG_HEALTH_PING === '1') {
     try {
@@ -159,12 +162,41 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
   async function getChatInfo(event, message) {
     try {
       const chat = await event.getChat();
-      return {
-        chatIdStr: chat?.id !== undefined ? String(chat.id) : '',
-        usernameLower: chat?.username ? String(chat.username).toLowerCase() : ''
-      };
-    } catch {
-      return { chatIdStr: message?.peerId?.channelId?.toString?.() || '', usernameLower: '' };
+      const chatIdStr = chat?.id !== undefined ? String(chat.id) : '';
+      const usernameLower = chat?.username ? String(chat.username).toLowerCase() : '';
+
+      if (debug) {
+        console.log('[telegram] getChatInfo: chat.id=', chat?.id, 'chat.username=', chat?.username);
+      }
+
+      return { chatIdStr, usernameLower };
+    } catch (err) {
+      if (debug) {
+        console.log('[telegram] getChatInfo error:', err.message);
+        console.log('[telegram] Trying fallback: peerId=', message?.peerId);
+      }
+
+      // Essayer plusieurs méthodes pour extraire l'ID
+      let chatIdStr = '';
+
+      // Méthode 1: channelId
+      if (message?.peerId?.channelId) {
+        chatIdStr = String(message.peerId.channelId);
+      }
+      // Méthode 2: chatId
+      else if (message?.peerId?.chatId) {
+        chatIdStr = String(message.peerId.chatId);
+      }
+      // Méthode 3: userId
+      else if (message?.peerId?.userId) {
+        chatIdStr = String(message.peerId.userId);
+      }
+
+      if (debug) {
+        console.log('[telegram] Fallback chatIdStr=', chatIdStr);
+      }
+
+      return { chatIdStr, usernameLower: '' };
     }
   }
 
@@ -257,9 +289,19 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     const caption = message.message || '';
     console.log(`[telegram] ${kind} in ${chatIdStr || usernameLower} -> msgId=${message.id}`);
 
+    if (debug) {
+      console.log('[telegram] Detected chatIdStr=', chatIdStr, 'usernameLower=', usernameLower);
+      console.log('[telegram] Filter active:', handles.size || ids.size ? 'YES' : 'NO');
+    }
+
     // Filtre pour n'écouter que les canaux configurés
     if (handles.size || ids.size) {
       const ok = (usernameLower && handles.has(usernameLower)) || (chatIdStr && ids.has(chatIdStr));
+      if (debug) {
+        console.log('[telegram] Channel filter check: ok=', ok);
+        console.log('[telegram]   username match:', usernameLower && handles.has(usernameLower));
+        console.log('[telegram]   id match:', chatIdStr && ids.has(chatIdStr));
+      }
       if (!ok) return;
     }
 

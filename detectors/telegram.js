@@ -117,13 +117,12 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
   }
 
   /**
-   * Récupère le premier lien playstake "bonus" depuis un message,
-   * en priorisant l'entity "Here" (MessageEntityTextUrl), puis preview, boutons, texte.
-   * Retourne { url, code, conditions } ou null.
+   * Récupère le code bonus depuis un message StakecomDailyDrops
+   * Le code est dans un spoiler (contenu masqué)
+   * Retourne { code, conditions } ou null.
    */
   function getStakeBonus(message) {
     const caption = message.message || '';
-    const candidates = [];
 
     if (debug) {
       console.log('[telegram] Message text:', caption.substring(0, 200));
@@ -133,95 +132,26 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     // Extraire les conditions depuis le texte
     const conditions = extractConditions(caption);
 
-    // Entities (cas "Here" et spoilers)
+    // Chercher dans les spoilers
     for (const ent of message.entities || []) {
       const type = ent.className || ent._;
       if (debug) console.log('[telegram] Entity type:', type);
 
-      if (type === 'MessageEntityTextUrl' && ent.url) {
-        candidates.push(ent.url);
-        if (debug) console.log('[telegram] Found TextUrl:', ent.url);
-      }
-      else if (type === 'MessageEntityUrl') {
-        const start = ent.offset ?? 0, end = start + (ent.length ?? 0);
-        const url = caption.substring(start, end);
-        candidates.push(url);
-        if (debug) console.log('[telegram] Found Url:', url);
-      }
       // Support des spoilers (contenu masqué)
-      else if (type === 'MessageEntitySpoiler') {
+      if (type === 'MessageEntitySpoiler') {
         const start = ent.offset ?? 0, end = start + (ent.length ?? 0);
-        const spoilerText = caption.substring(start, end);
+        const spoilerText = caption.substring(start, end).trim();
         if (debug) console.log('[telegram] Found Spoiler content:', spoilerText);
-        // Chercher des URLs dans le spoiler
-        const spoilerUrls = spoilerText.match(/https?:\/\/\S+/g) || [];
-        const spoilerStakeUrls = spoilerText.match(/\bplaystake\.club\/\S+/gi) || [];
-        candidates.push(...spoilerUrls, ...spoilerStakeUrls);
-      }
-    }
 
-    // Preview
-    if (message.media?.webpage?.url) {
-      candidates.push(message.media.webpage.url);
-      if (debug) console.log('[telegram] Found webpage URL:', message.media.webpage.url);
-    }
-
-    // Boutons inline
-    for (const row of message.replyMarkup?.rows || [])
-      for (const btn of row.buttons || [])
-        if (btn?.url) {
-          candidates.push(btn.url);
-          if (debug) console.log('[telegram] Found button URL:', btn.url);
-        }
-
-    // Texte brut
-    const textUrls = caption.match(/https?:\/\/\S+/g) || [];
-    const stakeUrls = caption.match(/\bplaystake\.club\/\S+/gi) || [];
-    candidates.push(...textUrls, ...stakeUrls);
-
-    if (debug) console.log('[telegram] Total candidates:', candidates.length);
-
-    // Sélectionne le 1er lien bonus valide avec code
-    for (const raw of candidates) {
-      const n = normalizeUrl(raw);
-      if (!n) continue;
-      try {
-        const u = new URL(n);
-        if (!isStakeHost(u.hostname)) continue;
-        if (!/\/bonus(\b|\/|\?)/i.test(u.pathname + (u.search || ''))) continue;
-        const code = extractCodeFromUrl(n);
-        if (code) {
-          if (debug) console.log('[telegram] Valid bonus found! URL:', n, 'Code:', code);
-          return { url: n, code, conditions };
-        }
-      } catch { /* continue */ }
-    }
-
-    // Si aucun lien complet trouvé, chercher un code brut (dans les spoilers par exemple)
-    if (debug) console.log('[telegram] No URL found, searching for raw codes...');
-
-    // Chercher dans les spoilers et le texte des codes qui ressemblent à des codes Stake
-    const allText = [caption, ...candidates].join(' ');
-    const rawCodeMatch = allText.match(/\b[a-zA-Z0-9]{10,30}\b/g);
-
-    if (rawCodeMatch && rawCodeMatch.length > 0) {
-      // Tester chaque code potentiel
-      for (const potentialCode of rawCodeMatch) {
-        // Ignorer les codes qui sont clairement pas des codes bonus
-        if (/^https?|^www\./i.test(potentialCode)) continue;
-
-        // Construire une URL fictive pour tester avec extractCodeFromUrl
-        const testUrl = `https://playstake.club/bonus?code=${potentialCode}`;
-        const extractedCode = extractCodeFromUrl(testUrl);
-
-        if (extractedCode === potentialCode) {
-          if (debug) console.log('[telegram] Valid raw code found:', potentialCode);
-          return { url: testUrl, code: potentialCode, conditions };
+        // Le code est dans le spoiler (alphanumérique, 10-30 caractères)
+        if (spoilerText && /^[a-zA-Z0-9]{10,30}$/.test(spoilerText)) {
+          if (debug) console.log('[telegram] Valid code found in spoiler:', spoilerText);
+          return { code: spoilerText, conditions };
         }
       }
     }
 
-    if (debug) console.log('[telegram] No valid bonus link or code found in message');
+    if (debug) console.log('[telegram] No valid bonus code found in spoilers');
     return null;
   }
 
@@ -360,14 +290,15 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
       const key = `tg:${chatIdStr || 'x'}:${message.id}`;
       if (await alreadySeen(key)) return;
 
-      if (debug) console.log('[telegram] lien trouvé:', bonus.url, 'code=', bonus.code);
+      if (debug) console.log('[telegram] code trouvé:', bonus.code);
 
-      // Publication Discord (template viendra ensuite dans buildPayloadFromUrl)
+      // Publication Discord
       try {
-        const payload = buildPayloadFromUrl(bonus.url, { rankMin: 'Bronze', conditions: bonus.conditions });
+        const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(bonus.code)}&currency=usdc&modal=redeemBonus`;
+        const payload = buildPayloadFromUrl(url, { rankMin: 'Bronze', conditions: bonus.conditions, code: bonus.code });
         const channel = await client.channels.fetch(channelId);
         await publishDiscord(channel, payload, { pingSpoiler: true });
-        console.log('[telegram] bonus publié ->', payload.kind, payload.code);
+        console.log('[telegram] StakecomDailyDrops bonus publié ->', bonus.code);
       } catch (e) {
         console.error('[telegram] parse/publish error:', e.message);
       }

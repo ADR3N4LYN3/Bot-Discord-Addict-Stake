@@ -4,7 +4,8 @@ import { StringSession } from 'telegram/sessions/index.js';
 import input from 'input';
 import { alreadySeen } from '../lib/store.js';
 import { buildPayloadFromUrl, publishDiscord } from '../lib/publisher.js';
-import { extractCodeFromUrl } from '../lib/parser.js';
+import { extractCodeFromUrl, inferBonusRecord } from '../lib/parser.js';
+import { DateTime } from 'luxon';
 
 // Import des events avec compatibilité de versions GramJS
 import * as TEventsIndex from 'telegram/events/index.js';
@@ -210,6 +211,42 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
            /^[a-zA-Z0-9]+$/.test(trimmed);
   }
 
+  /**
+   * Cherche les URLs playstake.club dans le message (texte + entities)
+   * Retourne la première URL trouvée ou null
+   */
+  function findPlaystakeUrl(message) {
+    const caption = message.message || '';
+
+    // 1. Chercher dans les entities (liens cliquables)
+    for (const ent of message.entities || []) {
+      const type = ent.className || ent._;
+      if (type === 'MessageEntityTextUrl' && ent.url) {
+        if (/playstake\.club/i.test(ent.url)) {
+          return ent.url;
+        }
+      }
+    }
+
+    // 2. Chercher dans le texte brut
+    const urlPattern = /https?:\/\/(?:www\.)?playstake\.club[^\s)]+/gi;
+    const match = caption.match(urlPattern);
+    if (match) return match[0];
+
+    return null;
+  }
+
+  /**
+   * Remplace les templates {DATE_FR} et {RANK_MIN} dans le titre/intro
+   */
+  function replaceTemplates(text, rankMin = 'Bronze') {
+    const dateFR = DateTime.now().setZone('Europe/Paris').setLocale('fr')
+      .toFormat('cccc dd LLLL yyyy').toUpperCase();
+    return text
+      .replace(/{DATE_FR}/g, dateFR)
+      .replace(/{RANK_MIN}/g, rankMin);
+  }
+
   // -------- Handler principal
 
   const handler = async (event, kind) => {
@@ -281,6 +318,52 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
         }
       }
       // Si pas de cache, on continue vers le système classique (peut-être un code dans un spoiler)
+    }
+
+    // -------- SYSTÈME VIP NOTICES : Weekly, Monthly, Pre-Monthly, Post-Monthly
+    const playstakeUrl = findPlaystakeUrl(message);
+    if (playstakeUrl) {
+      try {
+        const code = extractCodeFromUrl(playstakeUrl);
+        if (code) {
+          // Dédup
+          const key = `tg:${chatIdStr || 'x'}:${message.id}`;
+          if (await alreadySeen(key)) return;
+
+          if (debug) console.log('[telegram] VIP Notices: playstake URL found:', playstakeUrl, 'code=', code);
+
+          // Détecter le type de bonus (Weekly, Monthly, etc.)
+          const caption = message.message || '';
+          const rec = inferBonusRecord({ text: caption, url: playstakeUrl, code });
+
+          if (rec) {
+            // Remplacer les templates dans titre et intro
+            const title = replaceTemplates(rec.title, 'Bronze');
+            const description = replaceTemplates(rec.intro, 'Bronze');
+
+            if (debug) console.log('[telegram] VIP Notices: detected type=', rec.kind, 'title=', title);
+
+            // Construire l'URL et publier
+            const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(code)}&currency=usdc&modal=redeemBonus`;
+            const payload = buildPayloadFromUrl(url, {
+              rankMin: 'Bronze',
+              code: code,
+              title: title,
+              description: description
+            });
+
+            const channel = await client.channels.fetch(channelId);
+            await publishDiscord(channel, payload, { pingSpoiler: true });
+            console.log('[telegram] VIP Notices bonus publié ->', rec.kind, code);
+            return;
+          } else {
+            if (debug) console.log('[telegram] VIP Notices: bonus type not recognized');
+          }
+        }
+      } catch (e) {
+        console.error('[telegram] VIP Notices error:', e.message);
+      }
+      // Si erreur ou type non reconnu, on continue vers le système classique
     }
 
     // -------- SYSTÈME EXISTANT (StakecomDailyDrops) : code + conditions dans même message

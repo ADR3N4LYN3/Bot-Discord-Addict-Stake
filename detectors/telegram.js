@@ -102,8 +102,11 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
       const value = match[2].trim();
 
       // Filtrer les labels qui ressemblent à des conditions de bonus
-      // et ignorer les URLs
-      if (label && value && !/^https?:/i.test(value) && !/^https?:/i.test(label)) {
+      // Ignorer : URLs, "Code", et autres labels non pertinents
+      if (label && value &&
+          !/^https?:/i.test(value) &&
+          !/^https?:/i.test(label) &&
+          !/^code$/i.test(label)) {
         if (debug) console.log('[telegram] Found condition:', label, ':', value);
         conditions.push({ label, value });
       }

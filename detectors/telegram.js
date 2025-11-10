@@ -83,34 +83,65 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
 
   /**
    * Récupère le premier lien playstake "bonus" depuis un message,
-   * en priorisant l’entity "Here" (MessageEntityTextUrl), puis preview, boutons, texte.
+   * en priorisant l'entity "Here" (MessageEntityTextUrl), puis preview, boutons, texte.
    * Retourne { url, code } ou null.
    */
   function getStakeBonus(message) {
     const caption = message.message || '';
     const candidates = [];
 
-    // Entities (cas "Here")
+    if (debug) {
+      console.log('[telegram] Message text:', caption.substring(0, 200));
+      console.log('[telegram] Entities count:', (message.entities || []).length);
+    }
+
+    // Entities (cas "Here" et spoilers)
     for (const ent of message.entities || []) {
       const type = ent.className || ent._;
-      if (type === 'MessageEntityTextUrl' && ent.url) candidates.push(ent.url);
+      if (debug) console.log('[telegram] Entity type:', type);
+
+      if (type === 'MessageEntityTextUrl' && ent.url) {
+        candidates.push(ent.url);
+        if (debug) console.log('[telegram] Found TextUrl:', ent.url);
+      }
       else if (type === 'MessageEntityUrl') {
         const start = ent.offset ?? 0, end = start + (ent.length ?? 0);
-        candidates.push(caption.substring(start, end));
+        const url = caption.substring(start, end);
+        candidates.push(url);
+        if (debug) console.log('[telegram] Found Url:', url);
+      }
+      // Support des spoilers (contenu masqué)
+      else if (type === 'MessageEntitySpoiler') {
+        const start = ent.offset ?? 0, end = start + (ent.length ?? 0);
+        const spoilerText = caption.substring(start, end);
+        if (debug) console.log('[telegram] Found Spoiler content:', spoilerText);
+        // Chercher des URLs dans le spoiler
+        const spoilerUrls = spoilerText.match(/https?:\/\/\S+/g) || [];
+        const spoilerStakeUrls = spoilerText.match(/\bplaystake\.club\/\S+/gi) || [];
+        candidates.push(...spoilerUrls, ...spoilerStakeUrls);
       }
     }
 
     // Preview
-    if (message.media?.webpage?.url) candidates.push(message.media.webpage.url);
+    if (message.media?.webpage?.url) {
+      candidates.push(message.media.webpage.url);
+      if (debug) console.log('[telegram] Found webpage URL:', message.media.webpage.url);
+    }
 
     // Boutons inline
     for (const row of message.replyMarkup?.rows || [])
       for (const btn of row.buttons || [])
-        if (btn?.url) candidates.push(btn.url);
+        if (btn?.url) {
+          candidates.push(btn.url);
+          if (debug) console.log('[telegram] Found button URL:', btn.url);
+        }
 
     // Texte brut
-    candidates.push(...(caption.match(/https?:\/\/\S+/g) || []));
-    candidates.push(...(caption.match(/\bplaystake\.club\/\S+/gi) || [])); // URLs nues
+    const textUrls = caption.match(/https?:\/\/\S+/g) || [];
+    const stakeUrls = caption.match(/\bplaystake\.club\/\S+/gi) || [];
+    candidates.push(...textUrls, ...stakeUrls);
+
+    if (debug) console.log('[telegram] Total candidates:', candidates.length);
 
     // Sélectionne le 1er lien bonus valide avec code
     for (const raw of candidates) {
@@ -121,9 +152,14 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
         if (!isStakeHost(u.hostname)) continue;
         if (!/\/bonus(\b|\/|\?)/i.test(u.pathname + (u.search || ''))) continue;
         const code = extractCodeFromUrl(n);
-        if (code) return { url: n, code };
+        if (code) {
+          if (debug) console.log('[telegram] Valid bonus found! URL:', n, 'Code:', code);
+          return { url: n, code };
+        }
       } catch { /* continue */ }
     }
+
+    if (debug) console.log('[telegram] No valid bonus link found in message');
     return null;
   }
 

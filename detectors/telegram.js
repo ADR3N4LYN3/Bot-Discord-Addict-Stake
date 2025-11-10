@@ -218,8 +218,8 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     const bonus = getStakeBonus(message);
     if (!bonus) return;
 
-    // Dédup (canal + message + type d'event)
-    const key = `tg:${chatIdStr || 'x'}:${message.id}:${kind}`;
+    // Dédup (canal + message seulement, sans le type d'event pour éviter les doublons NEW/EDIT)
+    const key = `tg:${chatIdStr || 'x'}:${message.id}`;
     if (await alreadySeen(key)) return;
 
     if (debug) console.log('[telegram] lien trouvé:', bonus.url, 'code=', bonus.code);

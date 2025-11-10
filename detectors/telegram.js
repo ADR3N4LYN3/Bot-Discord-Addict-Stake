@@ -26,13 +26,17 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
   const string = process.env.TG_STRING_SESSION || '';
   const debug = process.env.DEBUG_TELEGRAM === '1';
 
-  // Normalise la liste de canaux (usernames sans @, et IDs -100...)
+  // Normalise la liste de canaux (usernames sans @, et IDs -100... ou numériques)
   const channelsRaw = (cfg.channels || '').split(',').map(s => s.trim()).filter(Boolean);
   const handles = new Set();
   const ids = new Set();
   for (const r of channelsRaw) {
-    if (/^-100\d+$/.test(r)) ids.add(r);
-    else handles.add(r.replace(/^@/, '').replace(/^https?:\/\/t\.me\//i, '').toLowerCase());
+    // Reconnaître les IDs : -100..., ou purement numérique
+    if (/^-?\d+$/.test(r)) {
+      ids.add(r);
+    } else {
+      handles.add(r.replace(/^@/, '').replace(/^https?:\/\/t\.me\//i, '').toLowerCase());
+    }
   }
 
   // Connexion Telegram

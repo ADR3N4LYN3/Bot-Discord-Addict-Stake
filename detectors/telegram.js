@@ -88,8 +88,13 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
    */
   function extractConditions(text) {
     const conditions = [];
-    // Pattern flexible pour capturer "Label: Value"
-    const pattern = /^([A-Za-z\s]+):\s*(.+)$/gm;
+
+    if (debug) {
+      console.log('[telegram] Extracting conditions from text:', text.substring(0, 500));
+    }
+
+    // Pattern flexible pour capturer "Label: Value" (avec ou sans début de ligne)
+    const pattern = /([A-Za-z\s]+):\s*([^\n]+)/g;
     let match;
 
     while ((match = pattern.exec(text)) !== null) {
@@ -97,11 +102,14 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
       const value = match[2].trim();
 
       // Filtrer les labels qui ressemblent à des conditions de bonus
-      if (label && value && !/^https?:/i.test(value)) {
+      // et ignorer les URLs
+      if (label && value && !/^https?:/i.test(value) && !/^https?:/i.test(label)) {
+        if (debug) console.log('[telegram] Found condition:', label, ':', value);
         conditions.push({ label, value });
       }
     }
 
+    if (debug) console.log('[telegram] Total conditions extracted:', conditions.length);
     return conditions;
   }
 

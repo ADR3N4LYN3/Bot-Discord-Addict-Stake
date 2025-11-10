@@ -282,13 +282,15 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
   }
 
   /**
-   * Remplace les templates {DATE_FR} et {RANK_MIN} dans le titre/intro
+   * Remplace les templates {DATE_FR}, {MONTH_FR} et {RANK_MIN} dans le titre/intro
    */
   function replaceTemplates(text, rankMin = 'Bronze') {
-    const dateFR = DateTime.now().setZone('Europe/Paris').setLocale('fr')
-      .toFormat('cccc dd LLLL yyyy').toUpperCase();
+    const now = DateTime.now().setZone('Europe/Paris').setLocale('fr');
+    const dateFR = now.toFormat('cccc dd LLLL yyyy').toUpperCase();
+    const monthFR = now.toFormat('LLLL yyyy').toUpperCase();
     return text
       .replace(/{DATE_FR}/g, dateFR)
+      .replace(/{MONTH_FR}/g, monthFR)
       .replace(/{RANK_MIN}/g, rankMin);
   }
 

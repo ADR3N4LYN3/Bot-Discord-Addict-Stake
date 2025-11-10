@@ -297,7 +297,9 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     // }
 
     // Détection du canal pour appliquer la bonne logique
+    if (debug) console.log('[telegram] Channel detection: username=', usernameLower, 'chatId=', chatIdStr);
     const isRainsTEAM = usernameLower === 'rainsteam' || chatIdStr === '1738096535';
+    if (debug) console.log('[telegram] isRainsTEAM:', isRainsTEAM);
 
     // -------- SYSTÈME RAINSTEAM : conditions et code dans messages séparés
     if (isRainsTEAM) {

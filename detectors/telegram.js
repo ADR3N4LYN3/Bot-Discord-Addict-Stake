@@ -82,9 +82,33 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
   };
 
   /**
+   * Extrait les conditions du bonus depuis le texte du message
+   * Format attendu : "Value: $X", "Total Drop Limit: $X,XXX", etc.
+   * Retourne un tableau de { label, value }
+   */
+  function extractConditions(text) {
+    const conditions = [];
+    // Pattern flexible pour capturer "Label: Value"
+    const pattern = /^([A-Za-z\s]+):\s*(.+)$/gm;
+    let match;
+
+    while ((match = pattern.exec(text)) !== null) {
+      const label = match[1].trim();
+      const value = match[2].trim();
+
+      // Filtrer les labels qui ressemblent à des conditions de bonus
+      if (label && value && !/^https?:/i.test(value)) {
+        conditions.push({ label, value });
+      }
+    }
+
+    return conditions;
+  }
+
+  /**
    * Récupère le premier lien playstake "bonus" depuis un message,
    * en priorisant l'entity "Here" (MessageEntityTextUrl), puis preview, boutons, texte.
-   * Retourne { url, code } ou null.
+   * Retourne { url, code, conditions } ou null.
    */
   function getStakeBonus(message) {
     const caption = message.message || '';
@@ -94,6 +118,9 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
       console.log('[telegram] Message text:', caption.substring(0, 200));
       console.log('[telegram] Entities count:', (message.entities || []).length);
     }
+
+    // Extraire les conditions depuis le texte
+    const conditions = extractConditions(caption);
 
     // Entities (cas "Here" et spoilers)
     for (const ent of message.entities || []) {
@@ -154,7 +181,7 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
         const code = extractCodeFromUrl(n);
         if (code) {
           if (debug) console.log('[telegram] Valid bonus found! URL:', n, 'Code:', code);
-          return { url: n, code };
+          return { url: n, code, conditions };
         }
       } catch { /* continue */ }
     }
@@ -178,7 +205,7 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
 
         if (extractedCode === potentialCode) {
           if (debug) console.log('[telegram] Valid raw code found:', potentialCode);
-          return { url: testUrl, code: potentialCode };
+          return { url: testUrl, code: potentialCode, conditions };
         }
       }
     }
@@ -226,7 +253,7 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
 
     // Publication Discord (template viendra ensuite dans buildPayloadFromUrl)
     try {
-      const payload = buildPayloadFromUrl(bonus.url, { rankMin: 'Bronze' });
+      const payload = buildPayloadFromUrl(bonus.url, { rankMin: 'Bronze', conditions: bonus.conditions });
       const channel = await client.channels.fetch(channelId);
       await publishDiscord(channel, payload, { pingSpoiler: true });
       console.log('[telegram] bonus publié ->', payload.kind, payload.code);

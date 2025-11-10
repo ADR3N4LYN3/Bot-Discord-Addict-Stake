@@ -60,7 +60,6 @@ cp .env.example .env
 
 - `PING_ROLE_ID` : ID du rôle à mentionner
 - `TG_STRING_SESSION` : Session Telegram (générée au premier lancement)
-- `BONUS_BASE_URL` : URL de base pour les liens bonus
 - `BUTTON_LABEL_TEXT` : Texte du bouton
 - `BONUS_IMAGE_URL` : URL de l'image de l'embed
 - `DEBUG_TELEGRAM` : Mode debug (0 ou 1)

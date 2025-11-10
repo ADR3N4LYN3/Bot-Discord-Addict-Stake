@@ -297,39 +297,36 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     // }
 
     // Détection du canal pour appliquer la bonne logique
-    if (debug) console.log('[telegram] Channel detection: username=', usernameLower, 'chatId=', chatIdStr);
-    const isRainsTEAM = usernameLower === 'rainsteam' || chatIdStr === '1738096535';
-    if (debug) console.log('[telegram] isRainsTEAM:', isRainsTEAM);
+    // RainsTEAM : les 2 premiers messages contiennent @RainsTEAM, le 3ème (code) non
+    const hasRainsTEAMMention = /@RainsTEAM/i.test(caption);
 
-    // -------- SYSTÈME RAINSTEAM : conditions et code dans messages séparés
-    if (isRainsTEAM) {
-      cleanExpiredCache();
+    if (debug) console.log('[telegram] RainsTEAM detection: mention=', hasRainsTEAMMention);
 
-      // Cas 1 : Message d'annonce avec conditions → stocker dans cache
-      if (isAnnouncementMessage(caption)) {
-        const conditions = extractConditions(caption);
-        if (conditions.length > 0) {
-          channelCache.set(chatIdStr, { conditions, timestamp: Date.now() });
-          if (debug) console.log('[telegram] RainsTEAM announcement: stored', conditions.length, 'conditions');
-        }
-        return; // Ne pas publier, on attend le code
+    // -------- SYSTÈME RAINSTEAM : détection par mention @RainsTEAM
+    cleanExpiredCache();
+
+    // Cas 1 : Message RainsTEAM avec annonce → stocker conditions
+    if (hasRainsTEAMMention && isAnnouncementMessage(caption)) {
+      const conditions = extractConditions(caption);
+      if (conditions.length > 0) {
+        channelCache.set(chatIdStr, { conditions, timestamp: Date.now() });
+        if (debug) console.log('[telegram] RainsTEAM announcement: stored', conditions.length, 'conditions');
       }
+      return; // Ne pas publier, on attend le code
+    }
 
-      // Cas 2 : Message "coming soon" → ignorer
-      if (isComingSoonMessage(caption)) {
-        if (debug) console.log('[telegram] RainsTEAM: ignoring "coming soon" message');
-        return;
-      }
+    // Cas 2 : Message RainsTEAM "coming soon" → ignorer
+    if (hasRainsTEAMMention && isComingSoonMessage(caption)) {
+      if (debug) console.log('[telegram] RainsTEAM: ignoring "coming soon" message');
+      return;
+    }
 
-      // Cas 3 : Code standalone → récupérer conditions du cache et publier
-      if (isStandaloneCode(caption)) {
+    // Cas 3 : Code standalone + cache existant → c'est le code RainsTEAM
+    if (isStandaloneCode(caption)) {
+      const cached = channelCache.get(chatIdStr);
+
+      if (cached && cached.conditions) {
         const code = caption.trim();
-        const cached = channelCache.get(chatIdStr);
-
-        if (!cached || !cached.conditions) {
-          if (debug) console.log('[telegram] RainsTEAM: code found but no cached conditions');
-          return;
-        }
 
         // Dédup
         const key = `tg:${chatIdStr || 'x'}:${message.id}`;
@@ -347,15 +344,13 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
 
           // Nettoyer le cache après publication
           channelCache.delete(chatIdStr);
+          return;
         } catch (e) {
           console.error('[telegram] RainsTEAM publish error:', e.message);
+          return;
         }
-        return;
       }
-
-      // Si aucun pattern RainsTEAM détecté
-      if (debug) console.log('[telegram] RainsTEAM: message ignored (no pattern matched)');
-      return;
+      // Si pas de cache, on continue vers le système classique (peut-être un code dans un spoiler)
     }
 
     // -------- SYSTÈME EXISTANT (StakecomDailyDrops) : code + conditions dans même message

@@ -160,24 +160,33 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
   }
 
   async function getChatInfo(event, message) {
+    let chatIdStr = '';
+    let usernameLower = '';
+
     try {
       const chat = await event.getChat();
-      const chatIdStr = chat?.id !== undefined ? String(chat.id) : '';
-      const usernameLower = chat?.username ? String(chat.username).toLowerCase() : '';
 
       if (debug) {
         console.log('[telegram] getChatInfo: chat.id=', chat?.id, 'chat.username=', chat?.username);
       }
 
-      return { chatIdStr, usernameLower };
+      if (chat?.id !== undefined) {
+        chatIdStr = String(chat.id);
+      }
+      if (chat?.username) {
+        usernameLower = String(chat.username).toLowerCase();
+      }
     } catch (err) {
       if (debug) {
         console.log('[telegram] getChatInfo error:', err.message);
-        console.log('[telegram] Trying fallback: peerId=', message?.peerId);
       }
+    }
 
-      // Essayer plusieurs méthodes pour extraire l'ID
-      let chatIdStr = '';
+    // Si chat.id est vide, essayer les fallbacks
+    if (!chatIdStr) {
+      if (debug) {
+        console.log('[telegram] No chat.id, trying fallback: peerId=', message?.peerId);
+      }
 
       // Méthode 1: channelId
       if (message?.peerId?.channelId) {
@@ -195,9 +204,9 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
       if (debug) {
         console.log('[telegram] Fallback chatIdStr=', chatIdStr);
       }
-
-      return { chatIdStr, usernameLower: '' };
     }
+
+    return { chatIdStr, usernameLower };
   }
 
   // -------- Cache système pour RainsTEAM (messages séparés: conditions puis code)

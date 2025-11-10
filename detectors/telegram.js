@@ -237,6 +237,49 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     }
   }
 
+  // -------- Cache système pour RainsTEAM (messages séparés: conditions puis code)
+  const channelCache = new Map(); // { chatId: { conditions: [...], timestamp: number } }
+  const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+  function cleanExpiredCache() {
+    const now = Date.now();
+    for (const [key, value] of channelCache.entries()) {
+      if (now - value.timestamp > CACHE_TTL) {
+        channelCache.delete(key);
+        if (debug) console.log('[telegram] Cache expired for', key);
+      }
+    }
+  }
+
+  /**
+   * Détecte si c'est un message d'annonce RainsTEAM avec conditions
+   * Ex: "FINAL BONUS DROP INCOMING!" ou "1st NORMAL DROP INCOMING!"
+   */
+  function isAnnouncementMessage(text) {
+    return /DROP\s+INCOMING/i.test(text);
+  }
+
+  /**
+   * Détecte si c'est un message "coming soon" à ignorer
+   * Ex: "FINAL BONUS DROP IS COMING IN FEW SECONDS!"
+   */
+  function isComingSoonMessage(text) {
+    return /COMING\s+IN\s+FEW\s+SECONDS/i.test(text) || /DROP\s+IS\s+COMING/i.test(text);
+  }
+
+  /**
+   * Détecte si c'est un code standalone (court, pas de ":", pas d'URL)
+   * Ex: "bestchat", "goodluck12"
+   */
+  function isStandaloneCode(text) {
+    const trimmed = text.trim();
+    // Doit être court, alphanumérique, sans ":" ni URL
+    return trimmed.length > 0 &&
+           trimmed.length < 50 &&
+           !/[:\/]/.test(trimmed) &&
+           /^[a-zA-Z0-9]+$/.test(trimmed);
+  }
+
   // -------- Handler principal
 
   const handler = async (event, kind) => {
@@ -244,6 +287,7 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     if (!message || !NewMessage) return;
 
     const { chatIdStr, usernameLower } = await getChatInfo(event, message);
+    const caption = message.message || '';
     console.log(`[telegram] ${kind} in ${chatIdStr || usernameLower} -> msgId=${message.id}`);
 
     // (Réactive le filtre si tu veux restreindre)
@@ -252,25 +296,80 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     //   if (!ok) return;
     // }
 
-    // Récupération du lien bonus
+    // -------- SYSTÈME EXISTANT (StakecomDailyDrops) : code + conditions dans même message
     const bonus = getStakeBonus(message);
-    if (!bonus) return;
+    if (bonus) {
+      // Dédup (canal + message seulement, sans le type d'event pour éviter les doublons NEW/EDIT)
+      const key = `tg:${chatIdStr || 'x'}:${message.id}`;
+      if (await alreadySeen(key)) return;
 
-    // Dédup (canal + message seulement, sans le type d'event pour éviter les doublons NEW/EDIT)
-    const key = `tg:${chatIdStr || 'x'}:${message.id}`;
-    if (await alreadySeen(key)) return;
+      if (debug) console.log('[telegram] lien trouvé:', bonus.url, 'code=', bonus.code);
 
-    if (debug) console.log('[telegram] lien trouvé:', bonus.url, 'code=', bonus.code);
-
-    // Publication Discord (template viendra ensuite dans buildPayloadFromUrl)
-    try {
-      const payload = buildPayloadFromUrl(bonus.url, { rankMin: 'Bronze', conditions: bonus.conditions });
-      const channel = await client.channels.fetch(channelId);
-      await publishDiscord(channel, payload, { pingSpoiler: true });
-      console.log('[telegram] bonus publié ->', payload.kind, payload.code);
-    } catch (e) {
-      console.error('[telegram] parse/publish error:', e.message);
+      // Publication Discord (template viendra ensuite dans buildPayloadFromUrl)
+      try {
+        const payload = buildPayloadFromUrl(bonus.url, { rankMin: 'Bronze', conditions: bonus.conditions });
+        const channel = await client.channels.fetch(channelId);
+        await publishDiscord(channel, payload, { pingSpoiler: true });
+        console.log('[telegram] bonus publié ->', payload.kind, payload.code);
+      } catch (e) {
+        console.error('[telegram] parse/publish error:', e.message);
+      }
+      return; // Bonus traité, on s'arrête ici
     }
+
+    // -------- NOUVEAU SYSTÈME (RainsTEAM) : conditions et code dans messages séparés
+    cleanExpiredCache();
+
+    // Cas 1 : Message d'annonce avec conditions → stocker dans cache
+    if (isAnnouncementMessage(caption)) {
+      const conditions = extractConditions(caption);
+      if (conditions.length > 0) {
+        channelCache.set(chatIdStr, { conditions, timestamp: Date.now() });
+        if (debug) console.log('[telegram] RainsTEAM announcement: stored', conditions.length, 'conditions');
+      }
+      return; // Ne pas publier, on attend le code
+    }
+
+    // Cas 2 : Message "coming soon" → ignorer
+    if (isComingSoonMessage(caption)) {
+      if (debug) console.log('[telegram] RainsTEAM: ignoring "coming soon" message');
+      return;
+    }
+
+    // Cas 3 : Code standalone → récupérer conditions du cache et publier
+    if (isStandaloneCode(caption)) {
+      const code = caption.trim();
+      const cached = channelCache.get(chatIdStr);
+
+      if (!cached || !cached.conditions) {
+        if (debug) console.log('[telegram] RainsTEAM: code found but no cached conditions');
+        return;
+      }
+
+      // Dédup
+      const key = `tg:${chatIdStr || 'x'}:${message.id}`;
+      if (await alreadySeen(key)) return;
+
+      if (debug) console.log('[telegram] RainsTEAM: code found with cached conditions:', code);
+
+      // Construire URL et publier
+      try {
+        const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(code)}&currency=usdc&modal=redeemBonus`;
+        const payload = buildPayloadFromUrl(url, { rankMin: 'Bronze', conditions: cached.conditions });
+        const channel = await client.channels.fetch(channelId);
+        await publishDiscord(channel, payload, { pingSpoiler: true });
+        console.log('[telegram] RainsTEAM bonus publié ->', code);
+
+        // Nettoyer le cache après publication
+        channelCache.delete(chatIdStr);
+      } catch (e) {
+        console.error('[telegram] RainsTEAM publish error:', e.message);
+      }
+      return;
+    }
+
+    // Si on arrive ici, c'est un message non géré
+    if (debug) console.log('[telegram] Message ignored (no bonus detected)');
   };
 
   // -------- Branchement des events

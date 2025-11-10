@@ -296,28 +296,8 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     //   if (!ok) return;
     // }
 
-    // -------- SYSTÈME EXISTANT (StakecomDailyDrops) : code + conditions dans même message
-    const bonus = getStakeBonus(message);
-    if (bonus) {
-      // Dédup (canal + message seulement, sans le type d'event pour éviter les doublons NEW/EDIT)
-      const key = `tg:${chatIdStr || 'x'}:${message.id}`;
-      if (await alreadySeen(key)) return;
-
-      if (debug) console.log('[telegram] lien trouvé:', bonus.url, 'code=', bonus.code);
-
-      // Publication Discord (template viendra ensuite dans buildPayloadFromUrl)
-      try {
-        const payload = buildPayloadFromUrl(bonus.url, { rankMin: 'Bronze', conditions: bonus.conditions });
-        const channel = await client.channels.fetch(channelId);
-        await publishDiscord(channel, payload, { pingSpoiler: true });
-        console.log('[telegram] bonus publié ->', payload.kind, payload.code);
-      } catch (e) {
-        console.error('[telegram] parse/publish error:', e.message);
-      }
-      return; // Bonus traité, on s'arrête ici
-    }
-
     // -------- NOUVEAU SYSTÈME (RainsTEAM) : conditions et code dans messages séparés
+    // IMPORTANT : Vérifier RainsTEAM AVANT le système classique pour éviter les faux positifs
     cleanExpiredCache();
 
     // Cas 1 : Message d'annonce avec conditions → stocker dans cache
@@ -366,6 +346,27 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
         console.error('[telegram] RainsTEAM publish error:', e.message);
       }
       return;
+    }
+
+    // -------- SYSTÈME EXISTANT (StakecomDailyDrops) : code + conditions dans même message
+    const bonus = getStakeBonus(message);
+    if (bonus) {
+      // Dédup (canal + message seulement, sans le type d'event pour éviter les doublons NEW/EDIT)
+      const key = `tg:${chatIdStr || 'x'}:${message.id}`;
+      if (await alreadySeen(key)) return;
+
+      if (debug) console.log('[telegram] lien trouvé:', bonus.url, 'code=', bonus.code);
+
+      // Publication Discord (template viendra ensuite dans buildPayloadFromUrl)
+      try {
+        const payload = buildPayloadFromUrl(bonus.url, { rankMin: 'Bronze', conditions: bonus.conditions });
+        const channel = await client.channels.fetch(channelId);
+        await publishDiscord(channel, payload, { pingSpoiler: true });
+        console.log('[telegram] bonus publié ->', payload.kind, payload.code);
+      } catch (e) {
+        console.error('[telegram] parse/publish error:', e.message);
+      }
+      return; // Bonus traité, on s'arrête ici
     }
 
     // Si on arrive ici, c'est un message non géré

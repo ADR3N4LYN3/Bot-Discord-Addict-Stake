@@ -337,7 +337,7 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
         // Construire URL et publier
         try {
           const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(code)}&currency=usdc&modal=redeemBonus`;
-          const payload = buildPayloadFromUrl(url, { rankMin: 'Bronze', conditions: cached.conditions });
+          const payload = buildPayloadFromUrl(url, { rankMin: 'Bronze', conditions: cached.conditions, code: code });
           const channel = await client.channels.fetch(channelId);
           await publishDiscord(channel, payload, { pingSpoiler: true });
           console.log('[telegram] RainsTEAM bonus publié ->', code);

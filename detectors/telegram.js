@@ -169,15 +169,15 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
           console.log('[telegram]   Raw:', JSON.stringify(spoilerTextRaw));
           console.log('[telegram]   Trimmed:', JSON.stringify(spoilerText));
           console.log('[telegram]   Length:', spoilerText.length);
-          console.log('[telegram]   Matches regex:', /^[a-zA-Z0-9_-]{3,50}$/.test(spoilerText));
+          console.log('[telegram]   Matches regex:', /^[a-zA-Z0-9]{10,30}$/.test(spoilerText));
         }
 
-        // Le code est dans le spoiler (alphanumérique avec hyphens/underscores, 3-50 caractères)
-        if (spoilerText && /^[a-zA-Z0-9_-]{3,50}$/.test(spoilerText)) {
+        // Le code est dans le spoiler (alphanumérique, 10-30 caractères)
+        if (spoilerText && /^[a-zA-Z0-9]{10,30}$/.test(spoilerText)) {
           if (debug) console.log('[telegram] Valid code found in spoiler:', spoilerText);
           return { code: spoilerText, conditions };
         } else if (debug) {
-          console.log('[telegram] Spoiler content does not match code pattern');
+          console.log('[telegram] Spoiler content does not match code pattern (expected 10-30 alphanumeric chars)');
         }
       }
     }

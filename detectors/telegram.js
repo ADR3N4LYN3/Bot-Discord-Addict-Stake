@@ -33,7 +33,12 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
   for (const r of channelsRaw) {
     // Reconnaître les IDs : -100..., ou purement numérique
     if (/^-?\d+$/.test(r)) {
-      ids.add(r);
+      // Normaliser l'ID : retirer le préfixe -100 s'il existe
+      let normalizedId = r;
+      if (normalizedId.startsWith('-100')) {
+        normalizedId = normalizedId.slice(4); // retire "-100"
+      }
+      ids.add(normalizedId);
     } else {
       handles.add(r.replace(/^@/, '').replace(/^https?:\/\/t\.me\//i, '').toLowerCase());
     }

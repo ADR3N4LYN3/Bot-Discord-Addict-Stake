@@ -6,6 +6,9 @@ import { alreadySeen } from '../lib/store.js';
 import { buildPayloadFromUrl, publishDiscord } from '../lib/publisher.js';
 import { extractCodeFromUrl, inferBonusRecord } from '../lib/parser.js';
 import { DateTime } from 'luxon';
+import { initOCR, extractCodeFromImage, extractCodeFromVideo, cleanupFile, isAlreadyProcessed, markAsProcessed } from '../lib/ocr.js';
+import fs from 'fs';
+import path from 'path';
 
 // Import des events avec compatibilité de versions GramJS
 import * as TEventsIndex from 'telegram/events/index.js';
@@ -67,6 +70,9 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
 
   console.log('[telegram] Configured channels:',
     handles.size || ids.size ? `handles=[${[...handles]}], ids=[${[...ids]}]` : 'ALL CHATS');
+
+  // Initialiser l'OCR pour la détection des codes dans les images/vidéos
+  await initOCR();
 
   // Health ping (optionnel)
   if (process.env.TG_HEALTH_PING === '1') {
@@ -344,10 +350,13 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     }
 
     // Détection du canal pour appliquer la bonne logique
-    // RainsTEAM : les 2 premiers messages contiennent @RainsTEAM, le 3ème (code) non
+    const isStakecomDailyDrops = usernameLower === 'stakecomdailydrops' || chatIdStr === '1977383442';
     const hasRainsTEAMMention = /@RainsTEAM/i.test(caption);
 
-    if (debug) console.log('[telegram] RainsTEAM detection: mention=', hasRainsTEAMMention);
+    if (debug) {
+      console.log('[telegram] Channel detection: StakecomDailyDrops=', isStakecomDailyDrops);
+      console.log('[telegram] RainsTEAM detection: mention=', hasRainsTEAMMention);
+    }
 
     // -------- SYSTÈME RAINSTEAM : détection par mention @RainsTEAM
     cleanExpiredCache();
@@ -447,27 +456,131 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
       // Si erreur ou type non reconnu, on continue vers le système classique
     }
 
-    // -------- SYSTÈME EXISTANT (StakecomDailyDrops) : code + conditions dans même message
-    const bonus = getStakeBonus(message);
-    if (bonus) {
-      // Dédup (canal + message seulement, sans le type d'event pour éviter les doublons NEW/EDIT)
-      const key = `tg:${chatIdStr || 'x'}:${message.id}`;
-      if (await alreadySeen(key)) return;
+    // -------- SYSTÈMES STAKECOMDAILYDROPS UNIQUEMENT : spoilers + OCR
+    if (isStakecomDailyDrops) {
+      // SYSTÈME 1: Spoilers textuels (code masqué dans le texte)
+      const bonus = getStakeBonus(message);
+      if (bonus) {
+        // Dédup (canal + message seulement, sans le type d'event pour éviter les doublons NEW/EDIT)
+        const key = `tg:${chatIdStr || 'x'}:${message.id}`;
+        if (await alreadySeen(key)) return;
 
-      if (debug) console.log('[telegram] code trouvé:', bonus.code);
+        if (debug) console.log('[telegram] code trouvé:', bonus.code);
 
-      // Publication Discord
-      try {
-        const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(bonus.code)}&currency=usdc&modal=redeemBonus`;
-        const payload = buildPayloadFromUrl(url, { rankMin: 'Bronze', conditions: bonus.conditions, code: bonus.code });
-        const channel = await client.channels.fetch(channelId);
-        await publishDiscord(channel, payload, { pingSpoiler: true });
-        console.log('[telegram] StakecomDailyDrops bonus publié ->', bonus.code);
-      } catch (e) {
-        console.error('[telegram] parse/publish error:', e.message);
+        // Publication Discord
+        try {
+          const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(bonus.code)}&currency=usdc&modal=redeemBonus`;
+          const payload = buildPayloadFromUrl(url, { rankMin: 'Bronze', conditions: bonus.conditions, code: bonus.code });
+          const channel = await client.channels.fetch(channelId);
+          await publishDiscord(channel, payload, { pingSpoiler: true });
+          console.log('[telegram] StakecomDailyDrops bonus publié ->', bonus.code);
+        } catch (e) {
+          console.error('[telegram] parse/publish error:', e.message);
+        }
+        return; // Bonus traité, on s'arrête ici
       }
-      return; // Bonus traité, on s'arrête ici
-    }
+
+      // SYSTÈME 2: OCR - détection des codes dans les images/vidéos
+      if (message.media) {
+        const mediaType = message.media.className || message.media._;
+
+        // Détecter les photos
+        if (mediaType === 'MessageMediaPhoto') {
+          // Vérifier si déjà traité (cache)
+          if (isAlreadyProcessed(`photo:${message.id}`)) {
+            if (debug) console.log('[telegram] OCR: photo already processed');
+            return;
+          }
+
+          try {
+            if (debug) console.log('[telegram] OCR: processing photo...');
+
+            // Télécharger la photo
+            const photoPath = path.join('/tmp', `tg_photo_${Date.now()}_${message.id}.jpg`);
+            await tg.downloadMedia(message.media, { outputFile: photoPath });
+
+            // Extraire le code avec OCR
+            const result = await extractCodeFromImage(photoPath);
+
+            // Nettoyer le fichier
+            cleanupFile(photoPath);
+
+            if (result.code) {
+              // Dédup
+              const key = `tg:${chatIdStr || 'x'}:${message.id}`;
+              if (await alreadySeen(key)) return;
+
+              markAsProcessed(`photo:${message.id}`);
+
+              if (debug) console.log('[telegram] OCR: code found in photo:', result.code);
+
+              // Extraire les conditions depuis le caption
+              const conditions = extractConditions(caption);
+
+              // Publier sur Discord
+              const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(result.code)}&currency=usdc&modal=redeemBonus`;
+              const payload = buildPayloadFromUrl(url, { rankMin: 'Bronze', conditions, code: result.code });
+              const channel = await client.channels.fetch(channelId);
+              await publishDiscord(channel, payload, { pingSpoiler: true });
+              console.log('[telegram] OCR photo bonus publié ->', result.code, `(confidence: ${result.confidence.toFixed(1)}%)`);
+              return;
+            } else {
+              if (debug) console.log('[telegram] OCR: no code found in photo');
+            }
+          } catch (e) {
+            console.error('[telegram] OCR photo error:', e.message);
+          }
+        }
+
+        // Détecter les vidéos
+        if (mediaType === 'MessageMediaDocument' && message.media.document?.mimeType?.startsWith('video/')) {
+          // Vérifier si déjà traité (cache)
+          if (isAlreadyProcessed(`video:${message.id}`)) {
+            if (debug) console.log('[telegram] OCR: video already processed');
+            return;
+          }
+
+          try {
+            if (debug) console.log('[telegram] OCR: processing video...');
+
+            // Télécharger la vidéo
+            const videoPath = path.join('/tmp', `tg_video_${Date.now()}_${message.id}.mp4`);
+            await tg.downloadMedia(message.media, { outputFile: videoPath });
+
+            // Extraire le code avec OCR
+            const result = await extractCodeFromVideo(videoPath);
+
+            // Nettoyer le fichier
+            cleanupFile(videoPath);
+
+            if (result.code) {
+              // Dédup
+              const key = `tg:${chatIdStr || 'x'}:${message.id}`;
+              if (await alreadySeen(key)) return;
+
+              markAsProcessed(`video:${message.id}`);
+
+              if (debug) console.log('[telegram] OCR: code found in video:', result.code);
+
+              // Extraire les conditions depuis le caption
+              const conditions = extractConditions(caption);
+
+              // Publier sur Discord
+              const url = `https://stake.com/settings/offers?type=drop&code=${encodeURIComponent(result.code)}&currency=usdc&modal=redeemBonus`;
+              const payload = buildPayloadFromUrl(url, { rankMin: 'Bronze', conditions, code: result.code });
+              const channel = await client.channels.fetch(channelId);
+              await publishDiscord(channel, payload, { pingSpoiler: true });
+              console.log('[telegram] OCR video bonus publié ->', result.code, `(confidence: ${result.confidence.toFixed(1)}%, ${result.framesProcessed} frames)`);
+              return;
+            } else {
+              if (debug) console.log('[telegram] OCR: no code found in video (processed', result.framesProcessed, 'frames)');
+            }
+          } catch (e) {
+            console.error('[telegram] OCR video error:', e.message);
+          }
+        }
+      }
+    } // Fin if (isStakecomDailyDrops)
 
     // Si on arrive ici, c'est un message non géré
     if (debug) console.log('[telegram] Message ignored (no bonus detected)');

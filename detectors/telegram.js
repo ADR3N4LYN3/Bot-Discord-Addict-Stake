@@ -148,18 +148,36 @@ export default async function useTelegramDetector(client, channelId, pingRoleId,
     // Chercher dans les spoilers
     for (const ent of message.entities || []) {
       const type = ent.className || ent._;
-      if (debug) console.log('[telegram] Entity type:', type);
+
+      if (debug) {
+        console.log('[telegram] Entity:', {
+          type,
+          offset: ent.offset,
+          length: ent.length
+        });
+      }
 
       // Support des spoilers (contenu masqué)
       if (type === 'MessageEntitySpoiler') {
-        const start = ent.offset ?? 0, end = start + (ent.length ?? 0);
-        const spoilerText = caption.substring(start, end).trim();
-        if (debug) console.log('[telegram] Found Spoiler content:', spoilerText);
+        const start = ent.offset ?? 0;
+        const end = start + (ent.length ?? 0);
+        const spoilerTextRaw = caption.substring(start, end);
+        const spoilerText = spoilerTextRaw.trim();
 
-        // Le code est dans le spoiler (alphanumérique, 10-30 caractères)
-        if (spoilerText && /^[a-zA-Z0-9]{10,30}$/.test(spoilerText)) {
+        if (debug) {
+          console.log('[telegram] Spoiler found:');
+          console.log('[telegram]   Raw:', JSON.stringify(spoilerTextRaw));
+          console.log('[telegram]   Trimmed:', JSON.stringify(spoilerText));
+          console.log('[telegram]   Length:', spoilerText.length);
+          console.log('[telegram]   Matches regex:', /^[a-zA-Z0-9_-]{3,50}$/.test(spoilerText));
+        }
+
+        // Le code est dans le spoiler (alphanumérique avec hyphens/underscores, 3-50 caractères)
+        if (spoilerText && /^[a-zA-Z0-9_-]{3,50}$/.test(spoilerText)) {
           if (debug) console.log('[telegram] Valid code found in spoiler:', spoilerText);
           return { code: spoilerText, conditions };
+        } else if (debug) {
+          console.log('[telegram] Spoiler content does not match code pattern');
         }
       }
     }
